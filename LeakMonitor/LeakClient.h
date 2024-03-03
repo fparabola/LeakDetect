@@ -12,6 +12,7 @@ typedef struct LEAKCLIENT_SETTINGS_
 {
    DWORD pid = 0;                            /// Remote Process ID
    std::optional<bool> inject;               /// Indicates whether the Leak.X86.dll / Leak.X64.dll
+   std::optional<bool> sqlite;
                                              /// should be injected to a remote process or not.
 } LEAKCLIENT_SETTINGS;
 

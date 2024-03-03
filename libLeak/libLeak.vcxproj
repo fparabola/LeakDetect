@@ -164,12 +164,14 @@
     <ClInclude Include="LeakFileStreamSerializer.h" />
     <ClInclude Include="LeakObject.h" />
     <ClInclude Include="libLeak.h" />
+    <ClInclude Include="SqliteWriter.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="LeakFileStream.cpp" />
     <ClCompile Include="LeakFileStreamParser.cpp" />
     <ClCompile Include="LeakFileStreamSerializer.cpp" />
     <ClCompile Include="libLeak.cpp" />
+    <ClCompile Include="SqliteWriter.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

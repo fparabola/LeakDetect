@@ -34,5 +34,8 @@
     <ClInclude Include="sqlite3\sqlite3.h">
       <Filter>Header Files\sqlite3</Filter>
     </ClInclude>
+    <ClInclude Include="GenerateSQLite.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

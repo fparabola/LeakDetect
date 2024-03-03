@@ -122,6 +122,8 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>..\Debug</AdditionalLibraryDirectories>
+      <AdditionalDependencies>LeakConverter.X86.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -168,6 +170,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="QueuedBackend.cpp" />
     <ClCompile Include="QueuedFilesystemBackend.cpp" />
+    <ClCompile Include="QueuedSqliteBackend.cpp" />
     <ClCompile Include="RemoteProcessAPI.cpp" />
     <ClCompile Include="Stacktrace.cpp" />
   </ItemGroup>
@@ -176,6 +179,7 @@
     <ClInclude Include="LeakClient.h" />
     <ClInclude Include="QueuedBackend.h" />
     <ClInclude Include="QueuedFilesystemBackend.h" />
+    <ClInclude Include="QueuedSqliteBackend.h" />
     <ClInclude Include="RemoteProcessAPI.h" />
   </ItemGroup>
   <ItemGroup>

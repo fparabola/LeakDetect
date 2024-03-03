@@ -9,6 +9,8 @@
 
 #include "libLeak.h"
 #include "LeakClient.h"
+#include "LeakBackend.h"
+#include "QueuedSqliteBackend.h"
 #include "QueuedFilesystemBackend.h"
 #include "RemoteProcessAPI.h"
 
@@ -297,6 +299,10 @@ int main(int argc, char** argv)
       {
          settings.pid = lookup_process ((argv[i + 1]));
       }
+      else if (strcmp (argument, "--sqlite") == 0)
+      {
+         settings.sqlite = true;
+      }
    }
 
    // Make sure the PID is not zero.
@@ -304,7 +310,13 @@ int main(int argc, char** argv)
       return 1;
 
    // Initialize the backend (serializer)
-   QueuedFilesystemBackend* backend = new QueuedFilesystemBackend ();
+   QueuedBackend* backend = nullptr;
+   if (settings.sqlite) {
+       backend = new QueuedSqliteBackend();
+   }
+   else {
+	   backend = new QueuedFilesystemBackend ();
+   }
    backend->initialize (settings.pid);
 
    ConsoleLeakClient client(backend);

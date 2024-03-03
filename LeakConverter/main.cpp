@@ -129,6 +129,7 @@ private:
 ///
 int main(int argc, char** argv)
 {
+    MessageBox(NULL, L"message", L"nothing", MB_OK);
    Application app (argc, argv);
    return app.Execute ();
 }

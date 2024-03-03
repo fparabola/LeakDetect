@@ -309,6 +309,8 @@ class LeakClient::Private
       }
 
       qptr->OnProfilingStopped ();
+      extern HANDLE g_hEventSqliteWriteClose;
+      SetEvent(g_hEventSqliteWriteClose);
    }
 
 private:

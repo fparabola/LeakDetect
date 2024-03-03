@@ -32,6 +32,9 @@
     <ClCompile Include="QueuedFilesystemBackend.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="QueuedSqliteBackend.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="LeakClient.h">
@@ -47,6 +50,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RemoteProcessAPI.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="QueuedSqliteBackend.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

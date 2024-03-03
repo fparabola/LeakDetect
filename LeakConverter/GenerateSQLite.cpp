@@ -9,10 +9,20 @@
 #include <libLeak.h>
 #include <LeakObject.h>
 #include <LeakFileStream.h>
+#include "GenerateSQLite.h"
+
+class Sqlite;
+
+Sqlite* g_sqlite;
+HANDLE g_hEventSqliteWrite;
+HANDLE g_hEventSqliteWriteDone;
+HANDLE g_hEventSqliteWriteClose;
+const libLeak::LeakObject* g_sqliteWriteObject;
+const std::vector<libLeak::SYMBOL_ENTRY>* g_sqlWriteSymbolEntry;
 
 namespace statements
 {
-   const char* CreateAllocationTable = R"(
+	const char* CreateAllocationTable = R"(
       CREATE TABLE "ALLOCATION" (
 	      "AllocationID"	         INTEGER,
 	      "StacktraceID"	         INTEGER,
@@ -25,7 +35,7 @@ namespace statements
       );
    )";
 
-   const char* CreateStackEntryTable = R"(
+	const char* CreateStackEntryTable = R"(
       CREATE TABLE "STACKENTRY" (
 	      "ID"	               INTEGER PRIMARY KEY AUTOINCREMENT,
 	      "StackTraceID"	      INTEGER NOT NULL,
@@ -37,492 +47,597 @@ namespace statements
       );
    )";
 
-   const char* CreateIndexAllocationStackTraceID = R"(
+	const char* CreateIndexAllocationStackTraceID = R"(
       CREATE INDEX "IDX_AllocationStacktraceID" ON "ALLOCATION" (
 	      "StacktraceID"
       );
    )";
 
-   const char* CreateIndexAllocationFreed = R"(
+	const char* CreateIndexAllocationFreed = R"(
       CREATE INDEX "IDX_AllocationFreed" ON "ALLOCATION" (
 	      "Freed"
       );
    )";
 
-   const char* CreateIndexStackEntryStackTraceID = R"(
+	const char* CreateIndexStackEntryStackTraceID = R"(
       CREATE INDEX "IDX_StackEntryStackTraceID" ON "STACKENTRY" (
 	      "StackTraceID"
       );
    )";
 
-   const char* CreateIndexStackEntrySymbolName = R"(
+	const char* CreateIndexStackEntrySymbolName = R"(
       CREATE INDEX "IDX_StackEntrySymbolName" ON "STACKENTRY" (
 	      "SymbolName"
       );
    )";
 
-   const char* InsertAllocation = R"(
+	const char* InsertAllocation = R"(
       INSERT INTO "ALLOCATION" 
          ("AllocationID","StacktraceID", "Pointer", "Size","AllocationTimestamp","FreeTimestamp","Freed") 
       VALUES 
          (?, ?, ?, ?, ?, ?, ?);
    )";
 
-   const char* UpdateAllocationFree = R"(
+	const char* UpdateAllocationFree = R"(
       UPDATE "ALLOCATION" SET "Freed"=1, "FreeTimestamp"=? WHERE "AllocationID" = ?;
    )";
 
-   const char* InsertStackEntry = R"(
+	const char* InsertStackEntry = R"(
       INSERT INTO "STACKENTRY"
          ("StackTraceID","StackTraceIndex","ModuleBaseAddress","FileName","SymbolName","LineNumber") 
       VALUES 
          (?, ?, ?, ?, ?, ?);
    )";
 
-   const char* SelectAllocation = R"(
+	const char* SelectAllocation = R"(
       SELECT AllocationID from ALLOCATION WHERE Pointer = ? AND Freed = 0 ORDER BY AllocationID ASC LIMIT 0, 1
    )";
 }
 
 class Sqlite
 {
-   sqlite3* db;
-   std::filesystem::path base_dir;
-   sqlite3_stmt* stmt_insert_allocation;
-   sqlite3_stmt* stmt_update_allocation;
-   sqlite3_stmt* stmt_insert_stackentry;
-   sqlite3_stmt* stmt_select_allocation;
+	sqlite3* db;
+	std::filesystem::path base_dir;
+	sqlite3_stmt* stmt_insert_allocation;
+	sqlite3_stmt* stmt_update_allocation;
+	sqlite3_stmt* stmt_insert_stackentry;
+	sqlite3_stmt* stmt_select_allocation;
 
 public:
-   Sqlite (const std::filesystem::path& directory)
-      : db(nullptr)
-      , base_dir(directory)
-      , stmt_insert_allocation(nullptr)
-      , stmt_update_allocation(nullptr)
-      , stmt_insert_stackentry(nullptr)
-      , stmt_select_allocation(nullptr)
-   {
-   }
+	Sqlite(const std::filesystem::path& directory)
+		: db(nullptr)
+		, base_dir(directory)
+		, stmt_insert_allocation(nullptr)
+		, stmt_update_allocation(nullptr)
+		, stmt_insert_stackentry(nullptr)
+		, stmt_select_allocation(nullptr)
+	{
+	}
 
-   ~Sqlite ()
-   {
-      if (stmt_insert_allocation)
-      {
-         sqlite3_finalize (stmt_insert_allocation);
-         stmt_insert_allocation = nullptr;
-      }
+	~Sqlite()
+	{
+		if (stmt_insert_allocation)
+		{
+			sqlite3_finalize(stmt_insert_allocation);
+			stmt_insert_allocation = nullptr;
+		}
 
-      if (stmt_update_allocation)
-      {
-         sqlite3_finalize (stmt_update_allocation);
-         stmt_update_allocation = nullptr;
-      }
+		if (stmt_update_allocation)
+		{
+			sqlite3_finalize(stmt_update_allocation);
+			stmt_update_allocation = nullptr;
+		}
 
-      if (stmt_insert_stackentry)
-      {
-         sqlite3_finalize (stmt_insert_stackentry);
-         stmt_insert_stackentry = nullptr;
-      }
+		if (stmt_insert_stackentry)
+		{
+			sqlite3_finalize(stmt_insert_stackentry);
+			stmt_insert_stackentry = nullptr;
+		}
 
-      if (stmt_select_allocation)
-      {
-         sqlite3_finalize (stmt_select_allocation);
-         stmt_select_allocation = nullptr;
-      }
+		if (stmt_select_allocation)
+		{
+			sqlite3_finalize(stmt_select_allocation);
+			stmt_select_allocation = nullptr;
+		}
 
-      if (db)
-      {
-         sqlite3_close (db);
-         db = nullptr;
-      }
-   }
+		if (db)
+		{
+			sqlite3_close(db);
+			db = nullptr;
+		}
+	}
 
-   std::filesystem::path GetNextDatabaseFileName (const std::string& name_template)
-   {
-      int index = 1;
-      std::filesystem::path fname;
+	std::filesystem::path GetNextDatabaseFileName(const std::string& name_template)
+	{
+		int index = 1;
+		std::filesystem::path fname;
 
-      do
-      {
-         fname = base_dir / (name_template + "-" + std::to_string (index++) + ".db");
-         std::string s = fname.string ();
-         std::ifstream f(s.c_str());
-         if (!f.good ())
-            return fname;
+		do
+		{
+			fname = base_dir / (name_template + "-" + std::to_string(index++) + ".db");
+			std::string s = fname.string();
+			std::ifstream f(s.c_str());
+			if (!f.good())
+				return fname;
 
-      } while (true);
-   }
+		} while (true);
+	}
 
-   int update_pragmas ()
-   {
-      int rc;
-      rc = sqlite3_exec (db, "PRAGMA JOURNAL_MODE=memory;", NULL, NULL, NULL);
-      if (rc) goto Cleanup;
+	int update_pragmas()
+	{
+		int rc;
+		rc = sqlite3_exec(db, "PRAGMA JOURNAL_MODE=memory;", NULL, NULL, NULL);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_exec (db, "PRAGMA synchronous=OFF;", NULL, NULL, NULL);
-      if (rc) goto Cleanup;
+		rc = sqlite3_exec(db, "PRAGMA synchronous=OFF;", NULL, NULL, NULL);
+		if (rc) goto Cleanup;
 
-   Cleanup:
-      return rc;
-   }
+	Cleanup:
+		return rc;
+	}
 
-   int create_indices ()
-   {
-      int rc;
-      char* error = nullptr;
+	int create_indices()
+	{
+		int rc;
+		char* error = nullptr;
 
-      rc = sqlite3_exec (db, statements::CreateIndexAllocationStackTraceID, NULL, NULL, &error);
-      if (rc) goto Cleanup;
+		rc = sqlite3_exec(db, statements::CreateIndexAllocationStackTraceID, NULL, NULL, &error);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_exec (db, statements::CreateIndexAllocationFreed, NULL, NULL, &error);
-      if (rc) goto Cleanup;
+		rc = sqlite3_exec(db, statements::CreateIndexAllocationFreed, NULL, NULL, &error);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_exec (db, statements::CreateIndexStackEntryStackTraceID, NULL, NULL, &error);
-      if (rc) goto Cleanup;
+		rc = sqlite3_exec(db, statements::CreateIndexStackEntryStackTraceID, NULL, NULL, &error);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_exec (db, statements::CreateIndexStackEntrySymbolName, NULL, NULL, &error);
-      if (rc) goto Cleanup;
+		rc = sqlite3_exec(db, statements::CreateIndexStackEntrySymbolName, NULL, NULL, &error);
+		if (rc) goto Cleanup;
 
-   Cleanup:
-      return rc;
-   }
+	Cleanup:
+		return rc;
+	}
 
-   int begin_transaction ()
-   {
-      int rc;
-      rc = sqlite3_exec (db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
-      return rc;
-   }
+	int begin_transaction()
+	{
+		int rc;
+		rc = sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
+		return rc;
+	}
 
-   int end_transaction ()
-   {
-      int rc;
-      rc = sqlite3_exec (db, "END TRANSACTION;", NULL, NULL, NULL);
-      return rc;
-   }
+	int end_transaction()
+	{
+		int rc;
+		rc = sqlite3_exec(db, "END TRANSACTION;", NULL, NULL, NULL);
+		return rc;
+	}
 
-   void print_err_if_any (int rc)
-   {
-      if (rc)
-      {
-         std::cerr << "Error executing SQLite3 statement: " << sqlite3_errmsg(db) << std::endl;
-      }
-   }
+	void print_err_if_any(int rc)
+	{
+		if (rc)
+		{
+			std::cerr << "Error executing SQLite3 statement: " << sqlite3_errmsg(db) << std::endl;
+		}
+	}
 
-   bool initialize ()
-   {
-      int rc;
-      char* error = nullptr;
+	bool initialize()
+	{
+		int rc;
+		char* error = nullptr;
 
-      std::filesystem::path fname_path = GetNextDatabaseFileName ("leak-sqlite");
-      std::string fname = fname_path.string ();
+		std::filesystem::path fname_path = GetNextDatabaseFileName("leak-sqlite");
+		std::string fname = fname_path.string();
+		std::cout << "Create sqlite db: " << fname << std::endl;
 
-      // create in memory database
-      rc = sqlite3_open (fname.c_str(), &db);
-      if (rc) goto Cleanup;
+		// create in memory database
+		rc = sqlite3_open(fname.c_str(), &db);
+		if (rc) goto Cleanup;
 
-      rc = update_pragmas ();
-      if (rc) goto Cleanup;
+		rc = update_pragmas();
+		if (rc) goto Cleanup;
 
-      rc = begin_transaction ();
-      if (rc) goto Cleanup;
+		rc = begin_transaction();
+		if (rc) goto Cleanup;
 
-      // create tables
-      rc = sqlite3_exec (db, statements::CreateAllocationTable, NULL, NULL, &error);
-      if (rc) goto Cleanup;
+		// create tables
+		rc = sqlite3_exec(db, statements::CreateAllocationTable, NULL, NULL, &error);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_exec (db, statements::CreateStackEntryTable, NULL, NULL, &error);
-      if (rc) goto Cleanup;
+		rc = sqlite3_exec(db, statements::CreateStackEntryTable, NULL, NULL, &error);
+		if (rc) goto Cleanup;
 
-      rc = end_transaction ();
-      if (rc) goto Cleanup;
+		rc = end_transaction();
+		if (rc) goto Cleanup;
 
-      // prepare update and insert statements
-      rc = sqlite3_prepare_v2 (db, statements::InsertAllocation, -1, &stmt_insert_allocation, 0);
-      if (rc) goto Cleanup;
+		// prepare update and insert statements
+		rc = sqlite3_prepare_v2(db, statements::InsertAllocation, -1, &stmt_insert_allocation, 0);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_prepare_v2 (db, statements::UpdateAllocationFree, -1, &stmt_update_allocation, 0);
-      if (rc) goto Cleanup;
+		rc = sqlite3_prepare_v2(db, statements::UpdateAllocationFree, -1, &stmt_update_allocation, 0);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_prepare_v2 (db, statements::InsertStackEntry, -1, &stmt_insert_stackentry, 0);
-      if (rc) goto Cleanup;
+		rc = sqlite3_prepare_v2(db, statements::InsertStackEntry, -1, &stmt_insert_stackentry, 0);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_prepare_v2 (db, statements::SelectAllocation, -1, &stmt_select_allocation, 0);
-      if (rc) goto Cleanup;
+		rc = sqlite3_prepare_v2(db, statements::SelectAllocation, -1, &stmt_select_allocation, 0);
+		if (rc) goto Cleanup;
 
-   Cleanup:
-      if (rc)
-      {
-         print_err_if_any (rc);
-         if (error)
-            sqlite3_free (error);
-      }
+	Cleanup:
+		if (rc)
+		{
+			print_err_if_any(rc);
+			if (error)
+				sqlite3_free(error);
+		}
 
-      return rc == 0;
-   }
+		return rc == 0;
+	}
 
-   Sqlite& operator << (const libLeak::LeakObjectAllocation& object)
-   {
-      int rc;
-      sqlite3_stmt* stmt = stmt_insert_allocation;
+	Sqlite& operator << (const libLeak::LeakObjectAllocation& object)
+	{
+		int rc;
+		sqlite3_stmt* stmt = stmt_insert_allocation;
 
-      static uint64_t allocationId = 1;
+		static uint64_t allocationId = 1;
 
-      rc = sqlite3_bind_int64 (stmt, 1, allocationId++);
-      if (rc) goto Cleanup;
-   
-      rc = sqlite3_bind_int64 (stmt, 2, object.StacktraceId);
-      if (rc) goto Cleanup;
+		rc = sqlite3_bind_int64(stmt, 1, allocationId++);
+		if (rc) goto Cleanup;
 
-#ifdef _WIN64
-      rc = sqlite3_bind_int64 (stmt, 3, object.Pointer);
-      if (rc) goto Cleanup;
-#else
-      rc = sqlite3_bind_int (stmt, 3, object.Pointer);
-      if (rc) goto Cleanup;
-#endif
-
-      rc = sqlite3_bind_int64 (stmt, 4, object.PointerSize);
-      if (rc) goto Cleanup;
-   
-      rc = sqlite3_bind_int64 (stmt, 5, object.Timestamp);
-      if (rc) goto Cleanup;
-   
-      rc = sqlite3_bind_int64 (stmt, 6, 0); // Free Timestamp;
-      if (rc) goto Cleanup;
-   
-      rc = sqlite3_bind_int64 (stmt, 7, 0); // Freed;
-      if (rc) goto Cleanup;
-
-      rc = sqlite3_step (stmt);
-      if (rc != SQLITE_DONE) goto Cleanup;
-
-      rc = sqlite3_clear_bindings (stmt);
-      if (rc) goto Cleanup;
-   
-      rc = sqlite3_reset (stmt);
-      if (rc) goto Cleanup;
-
-   Cleanup:
-      print_err_if_any (rc);
-      return *this;
-   }
-
-   uint64_t GetAllocationIdentifierByPointer (intptr_t pointer)
-   {
-      int rc;
-      sqlite3_stmt* stmt = stmt_select_allocation;
+		rc = sqlite3_bind_int64(stmt, 2, object.StacktraceId);
+		if (rc) goto Cleanup;
 
 #ifdef _WIN64
-      rc = sqlite3_bind_int64 (stmt, 1, pointer);
-      if (rc) goto Cleanup;
+		rc = sqlite3_bind_int64(stmt, 3, object.Pointer);
+		if (rc) goto Cleanup;
 #else
-      rc = sqlite3_bind_int (stmt, 1, pointer);
-      if (rc) goto Cleanup;
+		rc = sqlite3_bind_int(stmt, 3, object.Pointer);
+		if (rc) goto Cleanup;
 #endif
 
-      rc = sqlite3_step (stmt);
-      if (rc == SQLITE_ROW)
-      {
-         uint64_t result = sqlite3_column_int64 (stmt, 0);
-         sqlite3_reset (stmt);
-         return result;
-      }
-      else if (rc == SQLITE_DONE)
-      {
-         sqlite3_reset (stmt);
-         return 0;
-      }
+		rc = sqlite3_bind_int64(stmt, 4, object.PointerSize);
+		if (rc) goto Cleanup;
 
-   Cleanup:
-      print_err_if_any (rc);
-      return 0;
-   }
+		rc = sqlite3_bind_int64(stmt, 5, object.Timestamp);
+		if (rc) goto Cleanup;
 
-   Sqlite& operator << (const libLeak::LeakObjectDeallocation& object)
-   {
-      uint64_t id = GetAllocationIdentifierByPointer (object.Pointer);
-      if (id == 0)
-         return *this;
+		rc = sqlite3_bind_int64(stmt, 6, 0); // Free Timestamp;
+		if (rc) goto Cleanup;
 
-      int rc;
-      sqlite3_stmt* stmt = stmt_update_allocation;
+		rc = sqlite3_bind_int64(stmt, 7, 0); // Freed;
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_bind_int64 (stmt, 1, object.Timestamp);
-      if (rc) goto Cleanup;
+		rc = sqlite3_step(stmt);
+		if (rc != SQLITE_DONE) goto Cleanup;
 
-      rc = sqlite3_bind_int64 (stmt, 2, id);
-      if (rc) goto Cleanup;
+		rc = sqlite3_clear_bindings(stmt);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_step (stmt);
-      if (rc != SQLITE_DONE) goto Cleanup;
+		rc = sqlite3_reset(stmt);
+		if (rc) goto Cleanup;
 
-      rc = sqlite3_clear_bindings (stmt);
-      if (rc) goto Cleanup;
-   
-      rc = sqlite3_reset (stmt);
-      if (rc) goto Cleanup;
+	Cleanup:
+		print_err_if_any(rc);
+		return *this;
+	}
 
-   Cleanup:
-      print_err_if_any (rc);
-      return *this;
-   }
+	uint64_t GetAllocationIdentifierByPointer(intptr_t pointer)
+	{
+		int rc;
+		sqlite3_stmt* stmt = stmt_select_allocation;
 
-   Sqlite& operator << (
-      const std::pair<const libLeak::LeakObjectStacktrace&, 
-      const std::vector<libLeak::SYMBOL_ENTRY>&> pair)
-   {
-      int rc = 0;
-      sqlite3_stmt* stmt = stmt_insert_stackentry;
+#ifdef _WIN64
+		rc = sqlite3_bind_int64(stmt, 1, pointer);
+		if (rc) goto Cleanup;
+#else
+		rc = sqlite3_bind_int(stmt, 1, pointer);
+		if (rc) goto Cleanup;
+#endif
 
-      const libLeak::LeakObjectStacktrace& object = pair.first;
-      const std::vector<libLeak::SYMBOL_ENTRY>& entries = pair.second;
+		rc = sqlite3_step(stmt);
+		if (rc == SQLITE_ROW)
+		{
+			uint64_t result = sqlite3_column_int64(stmt, 0);
+			sqlite3_reset(stmt);
+			return result;
+		}
+		else if (rc == SQLITE_DONE)
+		{
+			sqlite3_reset(stmt);
+			return 0;
+		}
 
-      int index = 0;
-      for (const auto& entry : entries)
-      {
-         // StackTraceID
-         rc = sqlite3_bind_int64 (stmt, 1, object.StacktraceId);
-         if (rc) goto Cleanup;
+	Cleanup:
+		print_err_if_any(rc);
+		return 0;
+	}
 
-         // StackTraceIndex
-         rc = sqlite3_bind_int64 (stmt, 2, index++);
-         if (rc) goto Cleanup;
+	Sqlite& operator << (const libLeak::LeakObjectDeallocation& object)
+	{
+		uint64_t id = GetAllocationIdentifierByPointer(object.Pointer);
+		if (id == 0)
+			return *this;
 
-         // ModuleBaseAddress
-         rc = sqlite3_bind_int64 (stmt, 3, NULL);
-         if (rc) goto Cleanup;
+		int rc;
+		sqlite3_stmt* stmt = stmt_update_allocation;
 
-         // FileName
-         rc = sqlite3_bind_text (stmt, 4, entry.file.c_str(), -1, NULL);
-         if (rc) goto Cleanup;
+		rc = sqlite3_bind_int64(stmt, 1, object.Timestamp);
+		if (rc) goto Cleanup;
 
-         // SymbolName
-         rc = sqlite3_bind_text (stmt, 5, entry.name.c_str(), -1, NULL);
-         if (rc) goto Cleanup;
+		rc = sqlite3_bind_int64(stmt, 2, id);
+		if (rc) goto Cleanup;
 
-         // LineNumber
-         rc = sqlite3_bind_int64 (stmt, 6, entry.line);
-         if (rc) goto Cleanup;
+		rc = sqlite3_step(stmt);
+		if (rc != SQLITE_DONE) goto Cleanup;
 
-         rc = sqlite3_step (stmt);
-         if (rc != SQLITE_DONE) goto Cleanup;
+		rc = sqlite3_clear_bindings(stmt);
+		if (rc) goto Cleanup;
 
-         rc = sqlite3_clear_bindings (stmt);
-         if (rc) goto Cleanup;
-   
-         rc = sqlite3_reset (stmt);
-         if (rc) goto Cleanup;
-      }
+		rc = sqlite3_reset(stmt);
+		if (rc) goto Cleanup;
 
-   Cleanup:
-      print_err_if_any (rc);
-      return *this;
-   }
+	Cleanup:
+		print_err_if_any(rc);
+		return *this;
+	}
+
+	Sqlite& operator << (
+		const std::pair<const libLeak::LeakObjectStacktrace&,
+		const std::vector<libLeak::SYMBOL_ENTRY>&> pair)
+	{
+		int rc = 0;
+		sqlite3_stmt* stmt = stmt_insert_stackentry;
+
+		const libLeak::LeakObjectStacktrace& object = pair.first;
+		const std::vector<libLeak::SYMBOL_ENTRY>& entries = pair.second;
+
+		int index = 0;
+		for (const auto& entry : entries)
+		{
+			// StackTraceID
+			rc = sqlite3_bind_int64(stmt, 1, object.StacktraceId);
+			if (rc) goto Cleanup;
+
+			// StackTraceIndex
+			rc = sqlite3_bind_int64(stmt, 2, index++);
+			if (rc) goto Cleanup;
+
+			// ModuleBaseAddress
+			rc = sqlite3_bind_int64(stmt, 3, NULL);
+			if (rc) goto Cleanup;
+
+			// FileName
+			rc = sqlite3_bind_text(stmt, 4, entry.file.c_str(), -1, NULL);
+			if (rc) goto Cleanup;
+
+			// SymbolName
+			rc = sqlite3_bind_text(stmt, 5, entry.name.c_str(), -1, NULL);
+			if (rc) goto Cleanup;
+
+			// LineNumber
+			rc = sqlite3_bind_int64(stmt, 6, entry.line);
+			if (rc) goto Cleanup;
+
+			rc = sqlite3_step(stmt);
+			if (rc != SQLITE_DONE) goto Cleanup;
+
+			rc = sqlite3_clear_bindings(stmt);
+			if (rc) goto Cleanup;
+
+			rc = sqlite3_reset(stmt);
+			if (rc) goto Cleanup;
+		}
+
+	Cleanup:
+		print_err_if_any(rc);
+		return *this;
+	}
 };
 
-std::filesystem::path GetDirectoryFromInputFile (const std::string& input)
+std::filesystem::path GetDirectoryFromInputFile(const std::string& input)
 {
-   std::filesystem::path input_path (input);
-   return input_path.parent_path ();
+	std::filesystem::path input_path(input);
+	return input_path.parent_path();
 }
 
-void GenerateSQLite (const std::string& input)
+void GenerateSQLite(const std::string& input)
 {
-   Sqlite db(GetDirectoryFromInputFile(input));
-   if (!db.initialize ())
-   {
-      std::cerr << "Could not initialize target database." << std::endl;
-      return;
-   }
+	Sqlite db(GetDirectoryFromInputFile(input));
+	if (!db.initialize())
+	{
+		std::cerr << "Could not initialize target database." << std::endl;
+		return;
+	}
 
-   int rc = db.begin_transaction ();
-   if (rc)
-   {
-      db.print_err_if_any (rc);
-      return;
-   }
+	int rc = db.begin_transaction();
+	if (rc)
+	{
+		db.print_err_if_any(rc);
+		return;
+	}
 
-   FILE* fp = NULL;
-   fopen_s (&fp, input.c_str (), "rb");
-   if (fp == NULL)
-   {
-      std::cerr << "Could not open input file " << input << std::endl;
-      return;
-   }
+	FILE* fp = NULL;
+	fopen_s(&fp, input.c_str(), "rb");
+	if (fp == NULL)
+	{
+		std::cerr << "Could not open input file " << input << std::endl;
+		return;
+	}
 
-   libLeak::LeakObject nextObject;
-   libLeak::LeakFileStream stream (fp);
+	libLeak::LeakObject nextObject;
+	libLeak::LeakFileStream stream(fp);
 
-   libLeak::LeakObjectHeader header{ 0 };
-   if (!stream.ParseHeader (header) || libLeak::LeakObjectHeader::GetArchitecture() != header.Architecture)
-   {
-      std::cerr << "Could not parse input file. Invalid architecture." << std::endl;
-      return;
-   }
+	libLeak::LeakObjectHeader header{ 0 };
+	if (!stream.ParseHeader(header) || libLeak::LeakObjectHeader::GetArchitecture() != header.Architecture)
+	{
+		std::cerr << "Could not parse input file. Invalid architecture." << std::endl;
+		return;
+	}
 
-   while (stream.ParseObject (nextObject))
-   {
-      switch (nextObject.ObjectType)
-      {
-      
-      // Serialize Allocations
-      case (int)libLeak::LeakObjectType::Allocation:
-      {
-         libLeak::LeakObjectAllocation obj{ 0 };
-         if (stream.ParseAllocation (obj))
-         {
-            db << obj;
-         }
-         break;
-      }
+	while (stream.ParseObject(nextObject))
+	{
+		switch (nextObject.ObjectType)
+		{
 
-      // Serialize Deallocations
-      case (int)libLeak::LeakObjectType::Deallocation:
-      {
-         libLeak::LeakObjectDeallocation obj{ 0 };
-         if (stream.ParseDeallocation (obj))
-         {
-            db << obj;
-         }
-         break;
-      }
+			// Serialize Allocations
+		case (int)libLeak::LeakObjectType::Allocation:
+		{
+			libLeak::LeakObjectAllocation obj{ 0 };
+			if (stream.ParseAllocation(obj))
+			{
+				db << obj;
+			}
+			break;
+		}
 
-      // Serialize Stacktrace
-      case (int)libLeak::LeakObjectType::Stacktrace:
-      {
-         libLeak::LeakObjectStacktrace obj{ 0 };
-         std::vector<libLeak::SYMBOL_ENTRY> symbols;
-         if (stream.ParseStacktrace (obj, symbols))
-         {
-            db << std::pair<libLeak::LeakObjectStacktrace, std::vector<libLeak::SYMBOL_ENTRY>> (obj, symbols);
-         }
-         break;
-      }
+		// Serialize Deallocations
+		case (int)libLeak::LeakObjectType::Deallocation:
+		{
+			libLeak::LeakObjectDeallocation obj{ 0 };
+			if (stream.ParseDeallocation(obj))
+			{
+				db << obj;
+			}
+			break;
+		}
 
-      // The Header and Session is not particular interesting in a Sqlite dump.
-      // The only information of value is the starting Timestamp; however the first Allocation
-      // Timestamp should be enough for ongoing analysis.
-      //
-      case (int)libLeak::LeakObjectType::Header:
-      case (int)libLeak::LeakObjectType::Session:
-      default:
-         if (!stream.SkipObject (nextObject))
-         {
-            std::cerr << "Skipping object pointed to invalid position in file.\n";
-            goto Exit;
-         }
-         break;
-      }
-   }
+		// Serialize Stacktrace
+		case (int)libLeak::LeakObjectType::Stacktrace:
+		{
+			libLeak::LeakObjectStacktrace obj{ 0 };
+			std::vector<libLeak::SYMBOL_ENTRY> symbols;
+			if (stream.ParseStacktrace(obj, symbols))
+			{
+				db << std::pair<libLeak::LeakObjectStacktrace, std::vector<libLeak::SYMBOL_ENTRY>>(obj, symbols);
+			}
+			break;
+		}
+
+		// The Header and Session is not particular interesting in a Sqlite dump.
+		// The only information of value is the starting Timestamp; however the first Allocation
+		// Timestamp should be enough for ongoing analysis.
+		//
+		case (int)libLeak::LeakObjectType::Header:
+		case (int)libLeak::LeakObjectType::Session:
+		default:
+			if (!stream.SkipObject(nextObject))
+			{
+				std::cerr << "Skipping object pointed to invalid position in file.\n";
+				goto Exit;
+			}
+			break;
+		}
+	}
 
 Exit:
-   rc = db.end_transaction ();
-   if (rc) goto Cleanup;
+	rc = db.end_transaction();
+	if (rc) goto Cleanup;
 
-   rc = db.create_indices ();
-   if (rc) goto Cleanup;
+	rc = db.create_indices();
+	if (rc) goto Cleanup;
 
 Cleanup:
-   db.print_err_if_any (rc);
+	db.print_err_if_any(rc);
+}
+
+DWORD WINAPI SqliteLoop(LPVOID lpParameter) {
+	Sqlite& db = *g_sqlite;
+	HANDLE events[2] = { g_hEventSqliteWrite, g_hEventSqliteWriteClose };
+	while (true)
+	{
+		DWORD dwRes = WaitForMultipleObjects(2, events, false, INFINITE);
+		if (dwRes == WAIT_OBJECT_0 + 1) {
+			std::cout << "SqliteLoop close event" << std::endl;
+			break;
+		}
+
+		if (g_sqliteWriteObject == nullptr) {
+			continue;
+		};
+		auto* nextObject = g_sqliteWriteObject;
+		g_sqliteWriteObject = nullptr;
+
+		switch ((*nextObject).ObjectType)
+		{
+			// Serialize Allocations
+		case (int)libLeak::LeakObjectType::Allocation:
+		{
+			db.begin_transaction();
+			libLeak::LeakObjectAllocation* obj =
+				(libLeak::LeakObjectAllocation*)nextObject;
+			db << *obj;
+			db.end_transaction();
+			break;
+		}
+
+		// Serialize Deallocations
+		case (int)libLeak::LeakObjectType::Deallocation:
+		{
+			db.begin_transaction();
+			libLeak::LeakObjectDeallocation* obj =
+				(libLeak::LeakObjectDeallocation*)nextObject;
+			db << *obj;
+			db.end_transaction();
+			break;
+		}
+
+		// Serialize Stacktrace
+		case (int)libLeak::LeakObjectType::Stacktrace:
+		{
+			db.begin_transaction();
+			libLeak::LeakObjectStacktrace* obj =
+				(libLeak::LeakObjectStacktrace*)nextObject;
+			const std::vector<libLeak::SYMBOL_ENTRY>* symbols = g_sqlWriteSymbolEntry;
+			if (symbols == nullptr) {
+				continue;
+			}
+			db << std::pair<
+				libLeak::LeakObjectStacktrace,
+				std::vector<libLeak::SYMBOL_ENTRY>> (*obj, *symbols);
+			g_sqliteWriteObject = nullptr;
+			db.end_transaction();
+			break;
+		}
+		}
+		SetEvent(g_hEventSqliteWriteDone);
+	}
+Exit:
+	//int rc = db.end_transaction();
+	//if (rc) goto Cleanup;
+
+	int rc = db.create_indices();
+	if (rc) goto Cleanup;
+
+Cleanup:
+	db.print_err_if_any(rc);
+	return rc;
+}
+
+void GenerateSQLite(int pid)
+{
+	auto dir = std::filesystem::current_path();
+	g_sqlite = new Sqlite(dir);
+	Sqlite& db = *g_sqlite;
+	if (!db.initialize())
+	{
+		std::cerr << "Could not initialize target database." << std::endl;
+		return;
+	}
+
+	//int rc = db.begin_transaction();
+	//if (rc)
+	//{
+	//	db.print_err_if_any(rc);
+	//	return;
+	//}
+
+	g_hEventSqliteWrite = CreateEventA(NULL, false, false, "");
+	g_hEventSqliteWriteDone = CreateEventA(NULL, false, false, "");
+	g_hEventSqliteWriteClose = CreateEventA(NULL, false, false, "");
+	g_sqlite = &db;
+
+	auto hThreadSqliteLoop = CreateThread(NULL, NULL, SqliteLoop, (LPVOID)&db, 0, NULL);
+	if (hThreadSqliteLoop == NULL)
+	{
+		std::cerr << "Could not run SqliteLoop." << std::endl;
+		return;
+	}
 }

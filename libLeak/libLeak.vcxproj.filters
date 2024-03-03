@@ -26,6 +26,9 @@
     <ClInclude Include="LeakFileStreamParser.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SqliteWriter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="libLeak.cpp">
@@ -38,6 +41,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="LeakFileStreamParser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SqliteWriter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
